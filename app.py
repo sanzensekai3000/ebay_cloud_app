@@ -7,6 +7,7 @@ import re
 import time
 from datetime import datetime
 import random
+import json
 
 # Streamlitの設定
 st.set_page_config(
@@ -16,14 +17,15 @@ st.set_page_config(
 )
 
 class EbayScraper:
-    def __init__(self, requests_per_minute=10):
+    def __init__(self, requests_per_minute=5):
         self.requests_per_minute = requests_per_minute
         self.delay = 60 / requests_per_minute
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.8,image/webp,image/apng,*/*;q=0.5'
-        }
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36'
+        ]
         self.categories = self._get_categories()
     
     def _get_categories(self):
@@ -63,13 +65,16 @@ class EbayScraper:
             "ビデオゲーム、コンソール": "1249"
         }
     
+    def _get_random_user_agent(self):
+        return random.choice(self.user_agents)
+    
     def search(self, keyword, category="", min_price=None, max_price=None, condition=None, limit=50):
         search_url = "https://www.ebay.com/sch/i.html"
         params = {
             "_nkw": keyword,
             "_sacat": category,
             "_sop": "12",  # 終了日時: 近い順
-            "_ipg": "200"  # 1ページあたりの結果数
+            "_ipg": "100"  # 1ページあたりの結果数を100に減らす
         }
         
         if min_price and max_price:
@@ -82,13 +87,42 @@ class EbayScraper:
             elif condition == "中古":
                 params["LH_ItemCondition"] = "3000"
         
+        # モックデータの使用オプション
+        use_mock_data = st.session_state.get('use_mock_data', False)
+        if use_mock_data:
+            # モックデータを返す
+            return self._get_mock_data(keyword, limit)
+        
         try:
-            time.sleep(self.delay)
-            response = requests.get(search_url, params=params, headers=self.headers)
+            # リクエスト前の待機時間を増やす
+            delay = self.delay + random.uniform(1, 3)  # 1～3秒のランダムな遅延を追加
+            st.info(f"eBayにリクエストを送信します。{delay:.1f}秒お待ちください...")
+            time.sleep(delay)
+            
+            headers = {
+                'User-Agent': self._get_random_user_agent(),
+                'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.8,image/webp,image/apng,*/*;q=0.5',
+                'Referer': 'https://www.ebay.com/',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin',
+                'Sec-Fetch-User': '?1',
+                'Upgrade-Insecure-Requests': '1'
+            }
+            
+            response = requests.get(search_url, params=params, headers=headers, timeout=15)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'html.parser')
             items = soup.select('li.s-item')
+            
+            if not items:
+                st.warning("検索結果が見つかりませんでした。モックデータを使用しますか？")
+                st.session_state['use_mock_data'] = st.button("モックデータを使用")
+                if st.session_state.get('use_mock_data', False):
+                    return self._get_mock_data(keyword, limit)
+                return []
             
             results = []
             
@@ -127,11 +161,30 @@ class EbayScraper:
         
         except Exception as e:
             st.error(f"検索中にエラーが発生しました: {str(e)}")
+            st.warning("eBayからのデータ取得に失敗しました。モックデータを使用しますか？")
+            st.session_state['use_mock_data'] = st.button("モックデータを使用")
+            if st.session_state.get('use_mock_data', False):
+                return self._get_mock_data(keyword, limit)
             return []
+    
+    def _get_mock_data(self, keyword, limit=10):
+        """モックデータを生成する"""
+        mock_items = []
+        for i in range(min(limit, 20)):
+            price = round(random.uniform(20, 500), 2)
+            mock_items.append({
+                'タイトル': f"{keyword} アイテム #{i+1} (モックデータ)",
+                '価格': price,
+                '価格（表示）': f"US ${price}",
+                '配送': random.choice(["送料無料", "$10.00", "$5.99", "不明"]),
+                'リンク': "https://www.ebay.com/",
+                '画像URL': "https://via.placeholder.com/150"
+            })
+        return mock_items
 
 def main():
     try:
-        scraper = EbayScraper(requests_per_minute=10)
+        scraper = EbayScraper(requests_per_minute=5)
         
         st.title("eBay商品検索アプリ")
         st.markdown("""
@@ -142,6 +195,16 @@ def main():
         - 価格帯による絞り込み
         - 検索結果の保存とエクスポート
         """)
+        
+        # 開発者モード（トラブルシューティング用）
+        with st.expander("開発者オプション"):
+            if st.button("モックデータを使用する"):
+                st.session_state['use_mock_data'] = True
+                st.success("モックデータを使用モードに設定しました")
+            if st.button("実際のデータを使用する"):
+                st.session_state['use_mock_data'] = False
+                st.success("実際のデータを使用モードに設定しました")
+            st.write(f"現在のモード: {'モックデータ' if st.session_state.get('use_mock_data', False) else '実際のデータ'}")
         
         with st.form(key='search_form'):
             col1, col2 = st.columns(2)
@@ -235,4 +298,8 @@ def main():
         st.error(f"アプリケーションエラー: {str(e)}")
 
 if __name__ == "__main__":
+    # セッション状態の初期化
+    if 'use_mock_data' not in st.session_state:
+        st.session_state['use_mock_data'] = False
+    
     main() 
