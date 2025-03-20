@@ -98,6 +98,8 @@ class EbayScraper:
     
     def search(self, keyword, category="", min_price=None, max_price=None, condition=None, from_country=None, to_country=None, limit=50):
         search_url = "https://www.ebay.com/sch/i.html"
+        # 条件パラメータをローカル変数にコピーして、後で参照できるようにする
+        item_condition = condition
         params = {
             "_nkw": keyword,
             "_sacat": category,
@@ -131,7 +133,7 @@ class EbayScraper:
         use_mock_data = st.session_state.get('use_mock_data', False)
         if use_mock_data:
             # モックデータを返す
-            return self._get_mock_data(keyword, limit)
+            return self._get_mock_data(keyword, limit, item_condition)
         
         try:
             # リクエスト前の待機時間を大幅に増やす
@@ -169,7 +171,7 @@ class EbayScraper:
             if "Robot Check" in response.text or "ロボットチェック" in response.text:
                 st.error("eBayのロボット検出に引っかかりました。モックデータを使用します。")
                 st.session_state['use_mock_data'] = True
-                return self._get_mock_data(keyword, limit)
+                return self._get_mock_data(keyword, limit, item_condition)
             
             soup = BeautifulSoup(response.content, 'html.parser')
             items = soup.select('li.s-item')
@@ -178,10 +180,10 @@ class EbayScraper:
             if not items:
                 st.warning("検索結果が見つかりませんでした。モックデータを使用しますか？")
                 st.warning(f"検索URL: {response.url}")
-                use_mock = st.button("モックデータを使用")
+                use_mock = st.button("モックデータを使用", key="no_results_mock")
                 if use_mock:
                     st.session_state['use_mock_data'] = True
-                    return self._get_mock_data(keyword, limit)
+                    return self._get_mock_data(keyword, limit, item_condition)
                 return []
             
             results = []
@@ -246,7 +248,7 @@ class EbayScraper:
                             '価格（円）': price_jpy,
                             '価格（表示）': price_text,
                             '配送': shipping,
-                            '状態': condition_val if condition_val else "不明",
+                            '状態': item_condition or "不明",
                             '場所': location,
                             '出品者': seller,
                             'ショップ名': [shop_name] if shop_name != "N/A" else "N/A",
@@ -265,7 +267,7 @@ class EbayScraper:
                 use_mock = st.button("モックデータを使用", key="no_results_mock")
                 if use_mock:
                     st.session_state['use_mock_data'] = True
-                    return self._get_mock_data(keyword, limit)
+                    return self._get_mock_data(keyword, limit, item_condition)
                 
             return results
         
@@ -276,10 +278,10 @@ class EbayScraper:
             use_mock = st.button("モックデータを使用", key="error_mock")
             if use_mock:
                 st.session_state['use_mock_data'] = True
-                return self._get_mock_data(keyword, limit)
+                return self._get_mock_data(keyword, limit, item_condition)
             return []
     
-    def _get_mock_data(self, keyword, limit=10):
+    def _get_mock_data(self, keyword, limit=10, condition=None):
         """モックデータを生成する"""
         countries = ["Japan", "United States", "China", "United Kingdom", "Germany", "France"]
         sellers = ["yokitackle", "takuai", "active-sports-08", "gaku_jpshop", "japan-higasi-116"]
@@ -293,13 +295,16 @@ class EbayScraper:
             price_jpy = int(price * self.exchange_rate)
             seller_idx = random.randint(0, len(sellers)-1)
             
+            # 条件が指定されている場合はそれを使用、なければランダム
+            item_condition = condition if condition else random.choice(conditions)
+            
             mock_items.append({
                 'タイトル': f"{keyword} アイテム #{i+1} (モックデータ)",
                 '価格': price,
                 '価格（円）': price_jpy,
                 '価格（表示）': f"US ${price}",
                 '配送': random.choice(["送料無料", f"JPY {random.randint(5, 30)}00.0", "不明"]),
-                '状態': random.choice(conditions),
+                '状態': item_condition,
                 '場所': random.choice(countries),
                 '出品者': sellers[seller_idx],
                 'ショップ名': shop_names[seller_idx],
